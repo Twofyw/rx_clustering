@@ -20,7 +20,8 @@ def get_origin_data():
     # input_lh_tp_node_ui = sqlContext.read.format("jdbc").options(
         # url="jdbc:hive2://192.168.1.114:10000/zkfx_test?hive.resultset.use.unique.column.names=false",
         # driver="org.apache.hive.jdbc.HiveDriver", dbtable="lh_tp_node_ui", user="admin", password="admin").load()
-    input_lh_tp_node_ui = spark.read.csv("lh_tp_node_ui_small.csv", header=True, inferSchema=True)
+    # input_lh_tp_node_ui = spark.read.csv("lh_tp_node_ui.csv", header=True, inferSchema=True)
+    input_lh_tp_node_ui = spark.read.csv("100_generated_test_data.csv", header=True, inferSchema=True)
     input_lh_tp_node_ui = input_lh_tp_node_ui.filter('lv == 1')
     return input_lh_tp_node_ui
 
@@ -59,7 +60,6 @@ def get_corr_max_two_node_name(input_lh_tp_node_ui):
     print("In this circulation, node {} and node {} is best!".format(node_x, node_y))
     return node_x, node_y
 
-
 def linear_regression(node_x, node_y, node_join_xy, phase='A'):
     '''
     两节点在单个相位上做线性回归分析
@@ -87,7 +87,6 @@ def linear_regression(node_x, node_y, node_join_xy, phase='A'):
              lrModel.coefficients[3],
              lrModel.coefficients[4]]
     return param
-
 
 def get_linear_regression_param_list(data, node_x, node_y):
     '''
@@ -122,7 +121,6 @@ def get_linear_regression_param_list(data, node_x, node_y):
     param_dfs = spark.createDataFrame(param_df)
     return param_dfs, node_join_xy
 
-
 def updata_node_couple(data, node_join_xy, param_dfs, node_x, node_y, q):
     '''
     更新原始数据：从节点集合中删除两个子节点，添加父节点
@@ -155,7 +153,6 @@ def updata_node_couple(data, node_join_xy, param_dfs, node_x, node_y, q):
     new_data.select('node').distinct().show()
     return new_data
 
-
 def get_primary_secondary_single_data(param_dfs, node_x, node_y, q):
     '''
     :param param_dfs: 两节点的回归系数
@@ -178,7 +175,6 @@ def get_primary_secondary_single_data(param_dfs, node_x, node_y, q):
     p1_list = [node_x, 80 + q, avg_rsquare, avg_r1, avg_x1, avg_z1, avg_b0, avg_b1]
     p2_list = [node_y, 80 + q, avg_rsquare, avg_r2, avg_x2, avg_z2, avg_b0, avg_b1]
     return s1_dfs, s2_dfs, p1_list, p2_list
-
 
 def save_table_data(primary_list, secondary_df):
     # 主表存储
