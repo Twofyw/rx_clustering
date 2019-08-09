@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 
-import pandas as pd
-import numpy as np
-from pyspark.sql.functions import *
-from pyspark.ml.linalg import Vectors
-from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.regression import LinearRegression
 import time
-np.set_printoptions(edgeitems=30, linewidth=100000,
-    formatter=dict(float=lambda x: "%.3g" % x))
 
+import numpy as np
+import pandas as pd
 from pyspark import SparkConf
 from pyspark.context import SparkContext
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.regression import LinearRegression
+from pyspark.sql.functions import *
 from pyspark.sql.session import SparkSession
+
+np.set_printoptions(edgeitems=30, linewidth=100000,
+                    formatter=dict(float=lambda x: "%.3g" % x))
 
 conf = SparkConf().setAppName("App")
 conf = (conf.setMaster('local[*]')
@@ -22,37 +22,41 @@ conf = (conf.setMaster('local[*]')
 sc = SparkContext(conf=conf)
 spark = SparkSession(sc)
 
+NODE_COUNT = None
 PARENT_NODE_BASE = 80
 
+
 def get_origin_data():
-    '''
+    """
     得到原始数据
-    '''
+    """
     # input_lh_tp_node_ui = sqlContext.read.format("jdbc").options(
         # url="jdbc:hive2://192.168.1.114:10000/zkfx_test?hive.resultset.use.unique.column.names=false",
         # driver="org.apache.hive.jdbc.HiveDriver", dbtable="lh_tp_node_ui", user="admin", password="admin").load()
-    # input_lh_tp_node_ui = spark.read.csv("lh_tp_node_ui_small.csv", header=True, inferSchema=True)
-    input_lh_tp_node_ui = spark.read.csv("1000_generated_test_data.csv", header=True, inferSchema=True)
+    input_lh_tp_node_ui = spark.read.csv("lh_tp_node_ui.csv", header=True, inferSchema=True)
+    # input_lh_tp_node_ui = spark.read.csv("1000_generated_test_data.csv", header=True, inferSchema=True)
     input_lh_tp_node_ui = input_lh_tp_node_ui.filter('lv == 1')
     return input_lh_tp_node_ui
 
-def get_corr_max_two_node_name(input_lh_tp_node_ui, corrs):
-    '''
-    得到电压相关性最大的两个节点的名称
-    :param data: 原始数据
-    :return: 节点名 （电表名称）
-    '''
+
+def get_corr_max_two_node_name(corrs):
+    """
+    得到电压相关性最大的两个节点的下标
+    :param corrs: 矩阵
+    :return: 节点下标
+    """
     return np.unravel_index(corrs.argmax(), corrs.shape)
 
+
 def linear_regression(node_x, node_y, node_join_xy, phase='A'):
-    '''
+    """
     两节点在单个相位上做线性回归分析
     :param node_x: node_x name
     :param node_y: node_y name
     :node_join_xy: node_x node_y拼接后的数据
     :param phase: 相位
     :return: 回归系数列表
-    '''
+    """
     # 筛选出单相位的数据
     s3 = 'l1 == "%s"' % phase
     node_join_p = node_join_xy.filter(s3)
@@ -76,32 +80,37 @@ def linear_regression(node_x, node_y, node_join_xy, phase='A'):
     ]
     return param
 
+
 def get_linear_regression_param_list(data, node_x, node_y):
-    '''
+    """
     两节点在A、B、C三个相位上分别做线性回归
     :param data: 原始数据
     :param node_x: node_x name
     :param node_y: node_y name
     :return: 不同相位的回归系数 ~ spark-df/ node_x,node_y合并后的数据
-    '''
+    """
     # 生成做回归分析的数据
     s_x = "node == {}".format(node_x)
     s_y = "node == {}".format(node_y)
     nodex = data.filter(s_x)
     nodey = data.filter(s_y)
-    nodex = nodex.withColumnRenamed('node', 'node1').withColumnRenamed('u', 'u1').withColumnRenamed('ir',
-                                                                                                    'ir1').withColumnRenamed(
-        'ix', 'ix1')
-    nodey = nodey.withColumnRenamed('node', 'node2').withColumnRenamed('l1', 'l2').withColumnRenamed('u',
-                                                                                                     'u2').withColumnRenamed(
-        'ir', 'ir2').withColumnRenamed('ix', 'ix2').withColumnRenamed('data_time', 'data_time2')
+    nodex = (nodex.withColumnRenamed('node', 'node1')
+             .withColumnRenamed('u', 'u1')
+             .withColumnRenamed('ir', 'ir1')
+             .withColumnRenamed('ix', 'ix1'))
+    nodey = (nodey.withColumnRenamed('node', 'node2')
+             .withColumnRenamed('l1', 'l2')
+             .withColumnRenamed('u', 'u2')
+             .withColumnRenamed( 'ir', 'ir2')
+             .withColumnRenamed('ix', 'ix2')
+             .withColumnRenamed('data_time', 'data_time2'))
     node_join_xy = nodex.join(nodey, ((nodex['data_time'] == nodey.data_time2) & (nodex['l1'] == nodey.l2)))
     node_join_xy = node_join_xy.select('node1', 'node2', 'data_time', 'l1', 'u1', 'ir1', 'ix1', 'u2', 'ir2', 'ix2')
     node_join_xy = node_join_xy.withColumn("ir2", node_join_xy["ir2"] * (-1))
     node_join_xy = node_join_xy.withColumn("ix2", node_join_xy["ix2"] * (-1))
     node_join_xy = node_join_xy.repartition(80)
     print('node_join_xy')
-    node_join_xy.toDF('node1', 'node2', 'data_time', 'l1', 'u1', 'ir1', 'ix1', 'u2', 'ir2', 'ix2').show()
+    node_join_xy.toDF('node1', 'node2', 'data_time', 'l1', 'u1', 'ir1', 'ix1', 'u2', 'ir2', 'ix2').sort(asc('data_time')).show()
     # 获得两表~三相位~的回归系数列表
     param_list = []
     for phase in ['A', 'B', 'C']:
@@ -116,13 +125,14 @@ def get_linear_regression_param_list(data, node_x, node_y):
     param_dfs = spark.createDataFrame(param_df)
     return param_dfs, node_join_xy
 
+
 def updata_node_couple(data, node_join_xy, param_dfs, node_x, node_y, q):
-    '''
+    """
     更新原始数据：从节点集合中删除两个子节点，添加父节点
     :param data: 原始数据
     :param param_dfs: 两节点的回归系数 ~ dfs
     :return: 删除两个子节点，添加父节点后的输入数据
-    '''
+    """
     # 求出新的虚拟表箱的数据u ir ix
     node_couple_xy = param_dfs.withColumnRenamed("node1", "node3").withColumnRenamed("node2", "node4")
     node_xy = node_join_xy.join(node_couple_xy,
@@ -145,14 +155,14 @@ def updata_node_couple(data, node_join_xy, param_dfs, node_x, node_y, q):
     data = data.filter(s_filter)
     new_data = data.union(node_xy)
     # new_data = new_data.coalesce(1)
-    # new_data.select('node').distinct().show()
     return new_data
 
+
 def get_primary_secondary_single_data(param_dfs, node_x, node_y, q):
-    '''
+    """
     :param param_dfs: 两节点的回归系数
     :return: 主副表单条数据
-    '''
+    """
     # 副表单条数据
     data_x = param_dfs
     s1_dfs = data_x.select('node1', 'phase', 'rsquare', 'r1', 'x1', 'b0', 'b1')
@@ -170,6 +180,7 @@ def get_primary_secondary_single_data(param_dfs, node_x, node_y, q):
     p1_list = [node_x, PARENT_NODE_BASE + q, avg_rsquare, avg_r1, avg_x1, avg_z1, avg_b0, avg_b1]
     p2_list = [node_y, PARENT_NODE_BASE + q, avg_rsquare, avg_r2, avg_x2, avg_z2, avg_b0, avg_b1]
     return s1_dfs, s2_dfs, p1_list, p2_list
+
 
 def save_table_data(primary_list, secondary_df):
     # TODO: df.write.format("csv").save(filepath)
@@ -192,6 +203,7 @@ def save_table_data(primary_list, secondary_df):
     secondary_table.to_csv('new_4_secondary_table.csv')
     return primary_table, secondary_table
 
+
 def get_corr_matrix(input_lh_tp_node_ui, node_names):
     # 假设节点列表可以存进master内存
     # 分布式矩阵：https://stackoverflow.com/questions/33558755/matrix-multiplication-in-apache-spark
@@ -199,9 +211,9 @@ def get_corr_matrix(input_lh_tp_node_ui, node_names):
 
     # key: node
     # value: pd.DataFrame
-    pairRDD = input_lh_tp_node_ui.rdd\
-            .map(lambda r: (r['NODE'], (r['DATA_TIME'], r['L1'], r['U'])))\
-            .groupByKey()
+    pairRDD = (input_lh_tp_node_ui.rdd
+               .map(lambda r: (r['NODE'], (r['DATA_TIME'], r['L1'], r['U'])))
+               .groupByKey())
     node_names_2_idx = { o: i for i, o in enumerate(node_names) }
     pairRDD = pairRDD.map(lambda x: (node_names_2_idx[x[0]], pd.DataFrame(x[1].data, columns=header)))
 
@@ -220,7 +232,8 @@ def get_corr_matrix(input_lh_tp_node_ui, node_names):
     corrs = np.array(corrs_rdd.map(lambda r: r[2]).collect()).reshape((NODE_COUNT, NODE_COUNT))
     return pairRDD, corrs
 
-def update_distance(node_names, pairRDD, node_join_xy, param_dfs, idx_node_x, idx_node_y, corrs, q, inactive_set):
+
+def update_distance(pairRDD, node_join_xy, param_dfs, idx_node_x, idx_node_y, corrs, q, inactive_set):
     """
     参数：
         node_names: 修改内存
@@ -257,6 +270,7 @@ def update_distance(node_names, pairRDD, node_join_xy, param_dfs, idx_node_x, id
     # create df_parent
     inactive_set.add(idx_node_y)
     print('inactive_set', inactive_set)
+
     def calc_dist(item):
         r, index = item
         # df_existing = pd.DataFrame(r[1], columns=header)
@@ -283,7 +297,7 @@ def update_distance(node_names, pairRDD, node_join_xy, param_dfs, idx_node_x, id
     print(corrs)
     return pairRDD
 
-NODE_COUNT = None
+
 def main():
     # 读入数据
     input_lh_tp_node_ui = get_origin_data()
@@ -304,7 +318,6 @@ def main():
     pairRDD, corrs = get_corr_matrix(input_lh_tp_node_ui, node_names)
     print('距离矩阵生成时间: %s Seconds' % (time.time() - a))
 
-    merge_sequence = []
     # 循环，直到仅剩两个点为止
     inactive_set = set()
     for q in range(NODE_COUNT - 2):
@@ -312,7 +325,7 @@ def main():
         print("{} correlation data num of partition : {}".format(q, input_lh_tp_node_ui.rdd.getNumPartitions()))
 
         # 获取最相关的两个点
-        idx_node_x, idx_node_y = get_corr_max_two_node_name(input_lh_tp_node_ui, corrs)
+        idx_node_x, idx_node_y = get_corr_max_two_node_name(corrs)
         print('idx_node_x, idx_node_y', idx_node_x, idx_node_y)
         print('correlation running time: %s Seconds' % (time.time() - a))
 
@@ -322,6 +335,7 @@ def main():
         node_x, node_y = (node_names[i] for i in (idx_node_x, idx_node_y))
         print('node_x, node_y', node_x, node_y)
 
+        # TODO: sort?
         param_dfs, node_join_xy = get_linear_regression_param_list(input_lh_tp_node_ui, node_x, node_y)
         input_lh_tp_node_ui = updata_node_couple(input_lh_tp_node_ui, node_join_xy, param_dfs, node_x, node_y, q)
         print('regression running time: %s Seconds' % (time.time() - a))
@@ -336,7 +350,7 @@ def main():
             # 更新node_names和距离矩阵
         node_names[idx_node_x] = q + PARENT_NODE_BASE
         node_names[idx_node_y] = 'ERROR'
-        pairRDD = update_distance(node_names, pairRDD, node_join_xy, param_dfs, idx_node_x, idx_node_y, corrs, q, inactive_set)
+        pairRDD = update_distance(pairRDD, node_join_xy, param_dfs, idx_node_x, idx_node_y, corrs, q, inactive_set)
         print('other running time: %s Seconds' % (time.time() - a))
 
             # 更新主附表
@@ -352,6 +366,7 @@ def main():
     # 储存主附表
     # 主副表数据存储
     primary_table, secondary_table = save_table_data(primary_list, secondary_df)
+
 
 if __name__ == '__main__':
     main()
